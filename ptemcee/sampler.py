@@ -11,7 +11,14 @@ import numpy as np
 
 from numpy.random.mtrand import RandomState
 
+try:
+    from collections.abc import Iterable
+except ImportError:
+    # for py2.7, will be an Exception in 3.8
+    from collections import Iterable
+
 from . import util, chain, ensemble
+from .moves import StretchMove
 
 
 def make_ladder(ndim, ntemps=None, Tmax=None):
@@ -160,6 +167,7 @@ class Sampler(object):
     logp_kwargs = attr.ib(converter=dict, factory=dict)
 
     betas = attr.ib(default=None)
+    moves = attr.ib(default=None)
 
     # Tuning parameters.
     adaptive = attr.ib(converter=bool, default=False)
@@ -220,16 +228,32 @@ class Sampler(object):
         elif not isinstance(random, RandomState):
             raise TypeError('Invalid random state.')
 
+        if self.moves is None:
+            moves = [StretchMove()]
+            weights = [1.0]
+        elif isinstance(self.moves, Iterable):
+            try:
+                moves, weights = zip(*self.moves)
+            except TypeError:
+                moves = self.moves
+                weights = np.ones(len(self.moves))
+        else:
+            moves = [self.moves]
+            weights = [1.0]
+        weights = np.atleast_1d(weights).astype(float)
+        weights /= np.sum(weights)
+
         config = ensemble.EnsembleConfiguration(adaptation_lag=self.adaptation_lag,
                                                 adaptation_time=self.adaptation_time,
-                                                scale_factor=self.scale_factor,
                                                 evaluator=self._evaluator)
         return ensemble.Ensemble(x=x,
                                  betas=self.betas.copy(),
                                  config=config,
                                  adaptive=self.adaptive,
                                  random=random,
-                                 mapper=self._mapper)
+                                 mapper=self._mapper,
+                                 moves=moves,
+                                 weights=weights)
 
     def sample(self, x, random=None, thin_by=None):
         """

@@ -6,6 +6,7 @@ from attr.validators import instance_of
 from numpy.random.mtrand import RandomState
 
 from . import util
+from .moves import StretchMove, Model
 
 __all__ = ['Ensemble', 'EnsembleConfiguration']
 
@@ -14,7 +15,6 @@ __all__ = ['Ensemble', 'EnsembleConfiguration']
 class EnsembleConfiguration(object):
     adaptation_lag = attr.ib()
     adaptation_time = attr.ib()
-    scale_factor = attr.ib()
     evaluator = attr.ib()
 
 
@@ -34,6 +34,9 @@ class Ensemble(object):
     x = attr.ib(type=np.ndarray, converter=np.array)
     logP = attr.ib(type=np.ndarray, default=None)
     logl = attr.ib(type=np.ndarray, default=None)
+    _moves = attr.ib(type=np.ndarray, default=None)
+    _weights = attr.ib(type=np.ndarray, default=None)
+    _model = attr.ib(type=Model, init=False, default=None)
 
     adaptive = attr.ib(type=bool, converter=bool, default=False)
 
@@ -75,6 +78,14 @@ class Ensemble(object):
         if (self.logP == -np.inf).any():
             raise ValueError('Attempting to start with samples outside posterior support.')
 
+        if self._moves is None or self._weights is None:
+            self._moves = [StretchMove()]
+            self._weights = [1.0]
+
+        self._model = Model(
+            self._evaluate, self._tempered_likelihood, self._random
+        )
+
     def step(self):
         self._stretch(self.x, self.logP, self.logl)
         self.x = self._temperature_swaps(self.x, self.logP, self.logl)
@@ -95,42 +106,8 @@ class Ensemble(object):
         Perform the stretch-move proposal on each ensemble.py.
 
         """
-
-        self.jumps_accepted = np.zeros((self.ntemps, self.nwalkers))
-        w = self.nwalkers // 2
-        d = self.ndim
-        t = self.ntemps
-        loga = np.log(self._config.scale_factor)
-
-        for j in [0, 1]:
-            # Get positions of walkers to be updated and walker to be sampled.
-            j_update = j
-            j_sample = (j + 1) % 2
-            x_update = x[:, j_update::2, :]
-            x_sample = x[:, j_sample::2, :]
-
-            z = np.exp(self._random.uniform(low=-loga, high=loga, size=(t, w)))
-            y = np.empty((t, w, d))
-            for k in range(t):
-                js = self._random.randint(0, high=w, size=w)
-                y[k, :, :] = (x_sample[k, js, :] +
-                              z[k, :].reshape((w, 1)) *
-                              (x_update[k, :, :] - x_sample[k, js, :]))
-
-            y_logl, y_logp = self._evaluate(y)
-            y_logP = self._tempered_likelihood(y_logl) + y_logp
-
-            logp_accept = d * np.log(z) + y_logP - logP[:, j_update::2]
-            logr = np.log(self._random.uniform(low=0, high=1, size=(t, w)))
-
-            accepts = logr < logp_accept
-            accepts = accepts.flatten()
-
-            x_update.reshape((-1, d))[accepts, :] = y.reshape((-1, d))[accepts, :]
-            logP[:, j_update::2].reshape((-1,))[accepts] = y_logP.reshape((-1,))[accepts]
-            logl[:, j_update::2].reshape((-1,))[accepts] = y_logl.reshape((-1,))[accepts]
-
-            self.jumps_accepted[:, j_update::2] = accepts.reshape((t, w))
+        move = self._random.choice(self._moves, p=self._weights)
+        self.x, self.logP, self.logl, self.jumps_accepted = move.propose(self._model, x, logP, logl)
 
     def _evaluate(self, x):
         """
