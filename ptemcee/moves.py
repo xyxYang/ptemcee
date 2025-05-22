@@ -3,11 +3,12 @@
 # @Author : yangyuxin
 # @File : moves.py
 
+from functools import lru_cache
 import abc
 import numpy as np
 from collections import namedtuple
 
-__all__ = ["Model", "Move", "StretchMove", "MHMove", "GaussianMove"]
+__all__ = ["Model", "Move","RedBlueMove", "StretchMove", "DEMove", "MHMove", "GaussianMove"]
 
 Model = namedtuple(
     "Model", ("evaluate", "tempered_likelihood", "random")
@@ -30,17 +31,22 @@ class Move(object):
         """
 
 
-class StretchMove(Move):
-    def __init__(self, scale_factor=2):
-        self._scale_factor = scale_factor
+class RedBlueMove(Move):
+    def set_up(self, x):
+        pass
+
+    @abc.abstractmethod
+    def get_proposal(self, x_update, x_sample, random):
+        pass
 
     def propose(self, model, x, logP, logl):
+        self.set_up(x)
+
         ntemps, nwalkers, ndim = x.shape
         jumps_accepted = np.zeros((ntemps, nwalkers))
         w = nwalkers // 2
         d = ndim
         t = ntemps
-        loga = np.log(self._scale_factor)
 
         for j in [0, 1]:
             # Get positions of walkers to be updated and walker to be sampled.
@@ -49,18 +55,12 @@ class StretchMove(Move):
             x_update = x[:, j_update::2, :]
             x_sample = x[:, j_sample::2, :]
 
-            z = np.exp(model.random.uniform(low=-loga, high=loga, size=(t, w)))
-            y = np.empty((t, w, d))
-            for k in range(t):
-                js = model.random.randint(0, high=w, size=w)
-                y[k, :, :] = (x_sample[k, js, :] +
-                              z[k, :].reshape((w, 1)) *
-                              (x_update[k, :, :] - x_sample[k, js, :]))
+            y, factors = self.get_proposal(x_update, x_sample, model.random)
 
             y_logl, y_logp = model.evaluate(y)
             y_logP = model.tempered_likelihood(y_logl) + y_logp
 
-            logp_accept = d * np.log(z) + y_logP - logP[:, j_update::2]
+            logp_accept = factors + y_logP - logP[:, j_update::2]
             logr = np.log(model.random.uniform(low=0, high=1, size=(t, w)))
 
             accepts = logr < logp_accept
@@ -72,6 +72,62 @@ class StretchMove(Move):
 
             jumps_accepted[:, j_update::2] = accepts.reshape((t, w))
         return x, logP, logl, jumps_accepted
+
+
+class StretchMove(RedBlueMove):
+    def __init__(self, scale_factor=2):
+        self._scale_factor = scale_factor
+
+    def get_proposal(self, x_update, x_sample, random):
+        t, w, d = x_update.shape
+        loga = np.log(self._scale_factor)
+        z = np.exp(random.uniform(low=-loga, high=loga, size=(t, w)))
+        y = np.empty((t, w, d))
+        for k in range(t):
+            js = random.randint(0, high=w, size=w)
+            y[k, :, :] = (x_sample[k, js, :] +
+                          z[k, :].reshape((w, 1)) *
+                          (x_update[k, :, :] - x_sample[k, js, :]))
+        factors = d * np.log(z)
+        return y, factors
+
+
+class DEMove(RedBlueMove):
+    def __init__(self, sigma=1.0e-5, gamma0=None):
+        self.sigma = sigma
+        self.gamma0 = gamma0
+
+    def set_up(self, x):
+        self.g0 = self.gamma0
+        if self.g0 is None:
+            # Pure MAGIC:
+            ndim = x.shape[2]
+            self.g0 = 2.38 / np.sqrt(2 * ndim)
+
+    def get_proposal(self, x_update, x_sample, random):
+        t, w, d = x_update.shape
+        gamma = self.g0 * (1 + self.sigma * random.randn(t, w))
+        y = np.empty((t, w, d))
+        pairs = _get_nondiagonal_pairs(w)
+        for k in range(t):
+            indices = random.choice(pairs.shape[0], size=w, replace=True)
+            diffs = np.diff(x_sample[k, pairs[indices]], axis=1).squeeze(axis=1)
+            y[k, :, :] = x_update[k, :, :] + gamma[k, :].reshape((w, 1)) * diffs
+        factors = np.zeros((t, w))
+        return y, factors
+
+
+@lru_cache(maxsize=1)
+def _get_nondiagonal_pairs(n: int) -> np.ndarray:
+    """Get the indices of a square matrix with size n, excluding the diagonal."""
+    rows, cols = np.tril_indices(n, -1)  # -1 to exclude diagonal
+
+    # Combine rows-cols and cols-rows pairs
+    pairs = np.column_stack(
+        [np.concatenate([rows, cols]), np.concatenate([cols, rows])]
+    )
+
+    return pairs
 
 
 class MHMove(Move):

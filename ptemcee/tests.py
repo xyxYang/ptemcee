@@ -14,7 +14,7 @@ from numpy.random.mtrand import RandomState
 
 from .sampler import Sampler, make_ladder
 from .interruptible_pool import Pool
-from .moves import StretchMove, GaussianMove
+from .moves import StretchMove, GaussianMove, DEMove
 
 logprecision = -4
 
@@ -346,6 +346,14 @@ class Tests(object):
                           betas=make_ladder(self.ndim, self.ntemps, Tmax=self.Tmax),
                           moves=[(GaussianMove(move_cov), 0.8), (StretchMove(), 0.2)])
         # It's hard to coverage if here only use the GaussianMove
+        self.check_sampler(sampler, p0=self.p0)
+
+    def test_de_move(self):
+        sampler = Sampler(self.nwalkers, self.ndim,
+                          LogLikeGaussian(self.icov),
+                          LogPriorGaussian(self.icov, cutoff=self.cutoff),
+                          betas=make_ladder(self.ndim, self.ntemps, Tmax=self.Tmax),
+                          moves=DEMove())
         self.check_sampler(sampler, p0=self.p0)
 
     def test_ensemble(self):
