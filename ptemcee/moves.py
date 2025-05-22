@@ -7,7 +7,7 @@ import abc
 import numpy as np
 from collections import namedtuple
 
-__all__ = ["Model", "Move", "StretchMove"]
+__all__ = ["Model", "Move", "StretchMove", "MHMove", "GaussianMove"]
 
 Model = namedtuple(
     "Model", ("evaluate", "tempered_likelihood", "random")
@@ -72,3 +72,42 @@ class StretchMove(Move):
 
             jumps_accepted[:, j_update::2] = accepts.reshape((t, w))
         return x, logP, logl, jumps_accepted
+
+
+class MHMove(Move):
+    def __init__(self, proposal_function):
+        self.get_proposal = proposal_function
+
+    def propose(self, model, x, logP, logl):
+        ntemps, nwalkers, ndim = x.shape
+
+        # generate new proposal
+        y, factors = self.get_proposal(x, model.random)
+        y_logl, y_logp = model.evaluate(y)
+        y_logP = model.tempered_likelihood(y_logl) + y_logp
+        logp_diff = y_logP - logP + factors
+
+        # calculate witch one need to be accepted
+        logr = np.log(model.random.uniform(low=0, high=1, size=(ntemps, nwalkers)))
+        accepts = logr < logp_diff
+        accepts = accepts.flatten()
+
+        x.reshape((-1, ndim))[accepts, :] = y.reshape((-1, ndim))[accepts, :]
+        logP.reshape((-1,))[accepts] = y_logP.reshape((-1,))[accepts]
+        logl.reshape((-1,))[accepts] = y_logl.reshape((-1,))[accepts]
+
+        return x, logP, logl, accepts.reshape((ntemps, nwalkers))
+
+
+class GaussianMove(MHMove):
+    def __init__(self, cov):
+        self._cov = cov
+        super(GaussianMove, self).__init__(self.get_proposal)
+
+    def get_proposal(self, x, random):
+        temps, nwalkers, ndim = x.shape
+        if len(self._cov.shape) == 1:
+            y = x + self._cov * random.randn(*x.shape)
+        elif len(self._cov.shape) == 2:
+            y = x + random.multivariate_normal(np.zeros(len(self._cov)), self._cov)
+        return y, np.zeros((temps, nwalkers))
