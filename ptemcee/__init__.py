@@ -7,5 +7,6 @@ from .sampler import *
 from .interruptible_pool import InterruptiblePool
 from .mpi_pool import MPIPool
 from . import util
+from . import moves
 
 __version__ = '1.0.0'
