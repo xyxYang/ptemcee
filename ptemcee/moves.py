@@ -8,7 +8,7 @@ import abc
 import numpy as np
 from collections import namedtuple
 
-__all__ = ["Model", "Move","RedBlueMove", "StretchMove", "DEMove", "MHMove", "GaussianMove"]
+__all__ = ["Model", "Move","RedBlueMove", "StretchMove", "DEMove", "MHMove", "GaussianMove", "WalkMove"]
 
 Model = namedtuple(
     "Model", ("evaluate", "tempered_likelihood", "random")
@@ -128,6 +128,23 @@ def _get_nondiagonal_pairs(n: int) -> np.ndarray:
     )
 
     return pairs
+
+
+class WalkMove(RedBlueMove):
+    def __init__(self, s=None):
+        self.s = s
+
+    def get_proposal(self, x_update, x_sample, random):
+        t, w, d = x_update.shape
+        y = np.empty((t, w, d))
+        s0 = w if self.s is None else self.s
+        for k in range(t):
+            inds = random.choice(x_sample.shape[1], s0, replace=False)
+            cov = np.atleast_2d(np.cov(x_sample[k, inds, :], rowvar=0))
+            for i in range(w):
+                y[k, i, :] = random.multivariate_normal(x_update[k, i, :], cov)
+        factors = np.zeros((t, w))
+        return y, factors
 
 
 class MHMove(Move):

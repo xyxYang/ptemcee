@@ -14,7 +14,7 @@ from numpy.random.mtrand import RandomState
 
 from .sampler import Sampler, make_ladder
 from .interruptible_pool import Pool
-from .moves import StretchMove, GaussianMove, DEMove
+from .moves import StretchMove, GaussianMove, DEMove, WalkMove
 
 logprecision = -4
 
@@ -354,6 +354,14 @@ class Tests(object):
                           LogPriorGaussian(self.icov, cutoff=self.cutoff),
                           betas=make_ladder(self.ndim, self.ntemps, Tmax=self.Tmax),
                           moves=DEMove())
+        self.check_sampler(sampler, p0=self.p0)
+
+    def test_walk_move(self):
+        sampler = Sampler(self.nwalkers, self.ndim,
+                          LogLikeGaussian(self.icov),
+                          LogPriorGaussian(self.icov, cutoff=self.cutoff),
+                          betas=make_ladder(self.ndim, self.ntemps, Tmax=self.Tmax),
+                          moves=WalkMove())
         self.check_sampler(sampler, p0=self.p0)
 
     def test_ensemble(self):
